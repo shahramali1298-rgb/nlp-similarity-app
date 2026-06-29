@@ -1,131 +1,134 @@
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sentence_transformers import SentenceTransformer, util
-from sklearn.decomposition import PCA
+import matplotlib.patches as mpatches
+from transformers import pipeline
 
-st.set_page_config(page_title="NLP Text Similarity", layout="wide")
+st.set_page_config(page_title="NLP - Paul's Critical Thinking Standards", layout="wide")
 
-st.title("🧠 Text / Word Similarity using Pretrained NLP Model")
-st.markdown("**Model used:** `all-MiniLM-L6-v2` from Sentence Transformers (free, no training required)")
+st.title("🧠 Paul's Critical Thinking Standards Analyzer")
+st.markdown("**Model:** `monologg/bert-base-cased-goemotions-original` (Google GoEmotions — Free, No Training)")
+st.markdown("---")
 
-# Load model
+# ── Load GoEmotions model ──
 @st.cache_resource
 def load_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+    return pipeline(
+        "text-classification",
+        model="monologg/bert-base-cased-goemotions-original",
+        top_k=None
+    )
 
-model = load_model()
+classifier = load_model()
 
-st.markdown("---")
+# ── Mapping: GoEmotions → Paul's 7 Standards ──
+STANDARDS_MAP = {
+    "Clarity":      ["confusion", "curiosity", "realization", "surprise"],
+    "Accuracy":     ["approval", "disapproval", "admiration", "disappointment"],
+    "Precision":    ["nervousness", "annoyance", "desire", "caring"],
+    "Relevance":    ["excitement", "amusement", "gratitude", "relief"],
+    "Logic":        ["pride", "optimism", "remorse", "embarrassment"],
+    "Significance": ["joy", "love", "sadness", "fear"],
+    "Fairness":     ["anger", "disgust", "grief", "neutral"],
+}
+
+def compute_standards(text):
+    results = classifier(text)[0]
+    emotion_scores = {r["label"]: r["score"] for r in results}
+
+    standards_scores = {}
+    for standard, emotions in STANDARDS_MAP.items():
+        scores = [emotion_scores.get(e, 0.0) for e in emotions]
+        standards_scores[standard] = round(np.mean(scores) * 100, 2)
+
+    # Normalize to 0-100 range nicely
+    total = sum(standards_scores.values())
+    if total > 0:
+        standards_scores = {k: round(v / total * 100, 2) for k, v in standards_scores.items()}
+
+    return standards_scores, emotion_scores
+
+# ── UI ──
 st.header("📝 Enter Your Text")
-
-default_texts = "king\nqueen\nman\nwoman\nprince\nprincess\ndoctor\nnurse"
-user_input = st.text_area(
-    "Enter words or sentences (one per line):",
-    value=default_texts,
-    height=180
+user_text = st.text_area(
+    "Type any sentence or paragraph:",
+    value="The doctor carefully explained the diagnosis with clear evidence and logical reasoning.",
+    height=130
 )
 
-if st.button("🔍 Compute Similarity"):
-    items = [line.strip() for line in user_input.strip().split("\n") if line.strip()]
-
-    if len(items) < 2:
-        st.warning("Please enter at least 2 words or sentences.")
+if st.button("🔍 Analyze"):
+    if not user_text.strip():
+        st.warning("Please enter some text.")
     else:
-        embeddings = model.encode(items, convert_to_tensor=True)
-        cos_sim_matrix = util.cos_sim(embeddings, embeddings).numpy()
+        with st.spinner("Analyzing..."):
+            standards_scores, emotion_scores = compute_standards(user_text)
 
         st.markdown("---")
-        st.header("📊 Similarity Results")
+        st.header("📊 Paul's Critical Thinking Standards — Scores")
 
-        # --- Top Similar Pairs ---
-        st.subheader("Top Similar Pairs")
-        pairs = []
-        for i in range(len(items)):
-            for j in range(i + 1, len(items)):
-                pairs.append((items[i], items[j], float(cos_sim_matrix[i][j])))
-        pairs.sort(key=lambda x: x[2], reverse=True)
-
-        top_pairs = pairs[:min(8, len(pairs))]
-        for p in top_pairs:
-            st.write(f"**{p[0]}** ↔ **{p[1]}** → Score: `{p[2]:.4f}`")
+        standards = list(standards_scores.keys())
+        scores    = list(standards_scores.values())
+        colors    = ["#4C72B0","#DD8452","#55A868","#C44E52","#8172B2","#937860","#DA8BC3"]
 
         col1, col2, col3 = st.columns(3)
 
-        # --- Graph 1: Bar Chart ---
+        # ── Graph 1: Horizontal Bar Chart ──
         with col1:
-            st.subheader("📊 Bar Chart — Top Similar Pairs")
-            labels = [f"{p[0]} & {p[1]}" for p in top_pairs]
-            scores = [p[2] for p in top_pairs]
-
+            st.subheader("📊 Standards Score Bar Chart")
             fig1, ax1 = plt.subplots(figsize=(6, 4))
-            bars = ax1.barh(labels[::-1], scores[::-1], color="steelblue")
-            ax1.set_xlabel("Cosine Similarity Score")
-            ax1.set_title("Top Similar Pairs")
-            ax1.set_xlim(0, 1)
+            bars = ax1.barh(standards[::-1], scores[::-1], color=colors[::-1])
+            ax1.set_xlabel("Score (%)")
+            ax1.set_xlim(0, max(scores) * 1.25)
+            ax1.set_title("Paul's Standards Scores")
             for bar, score in zip(bars, scores[::-1]):
-                ax1.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2,
-                         f"{score:.3f}", va="center", fontsize=9)
+                ax1.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
+                         f"{score:.1f}%", va="center", fontsize=9)
             plt.tight_layout()
             st.pyplot(fig1)
 
-        # --- Graph 2: Heatmap ---
+        # ── Graph 2: Pie Chart ──
         with col2:
-            st.subheader("🔥 Heatmap — Pairwise Similarity")
+            st.subheader("🥧 Standards Distribution")
             fig2, ax2 = plt.subplots(figsize=(6, 4))
-            sns.heatmap(
-                cos_sim_matrix,
-                annot=True, fmt=".2f",
-                xticklabels=items, yticklabels=items,
-                cmap="YlOrRd", ax=ax2,
-                linewidths=0.5
+            wedges, texts, autotexts = ax2.pie(
+                scores, labels=standards, autopct="%1.1f%%",
+                colors=colors, startangle=140,
+                textprops={"fontsize": 8}
             )
-            ax2.set_title("Pairwise Cosine Similarity")
-            plt.xticks(rotation=45, ha="right", fontsize=8)
-            plt.yticks(rotation=0, fontsize=8)
+            ax2.set_title("% Distribution of Standards")
             plt.tight_layout()
             st.pyplot(fig2)
 
-        # --- Graph 3: 2D PCA Plot ---
+        # ── Graph 3: Radar Chart ──
         with col3:
-            st.subheader("🗺️ 2D PCA Embedding Plot")
-            emb_np = embeddings.numpy()
-            n_components = min(2, len(items))
-            pca = PCA(n_components=n_components)
-            reduced = pca.fit_transform(emb_np)
+            st.subheader("🕸️ Radar Chart")
+            N = len(standards)
+            angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+            values = scores + [scores[0]]
+            angles += angles[:1]
 
-            fig3, ax3 = plt.subplots(figsize=(6, 4))
-            ax3.scatter(reduced[:, 0], reduced[:, 1] if n_components > 1 else np.zeros(len(items)),
-                        color="darkorange", s=80, zorder=5)
-            for i, label in enumerate(items):
-                ax3.annotate(label,
-                             (reduced[i, 0], reduced[i, 1] if n_components > 1 else 0),
-                             textcoords="offset points", xytext=(6, 4), fontsize=9)
-            ax3.set_title("PCA 2D Projection of Embeddings")
-            ax3.set_xlabel("PC1")
-            ax3.set_ylabel("PC2")
+            fig3, ax3 = plt.subplots(figsize=(6, 4), subplot_kw=dict(polar=True))
+            ax3.plot(angles, values, color="#4C72B0", linewidth=2)
+            ax3.fill(angles, values, color="#4C72B0", alpha=0.25)
+            ax3.set_xticks(angles[:-1])
+            ax3.set_xticklabels(standards, fontsize=8)
+            ax3.set_title("Standards Radar", pad=15)
             plt.tight_layout()
             st.pyplot(fig3)
 
-        # --- Paul's Critical Thinking Standards ---
+        # ── Scores Table ──
         st.markdown("---")
-        st.header("🧠 Paul's Critical Thinking Standards")
+        st.subheader("📋 Exact Scores")
+        cols = st.columns(7)
+        for i, (std, score) in enumerate(standards_scores.items()):
+            with cols[i]:
+                st.metric(label=std, value=f"{score:.1f}%")
 
-        best = top_pairs[0]
-
-        standards = {
-            "✅ Clarity": f"The user entered {len(items)} items. The model computed cosine similarity scores between all pairs. A score of 1.0 means identical, 0.0 means unrelated.",
-            "✅ Accuracy": f"Model used: `all-MiniLM-L6-v2` (Sentence Transformers, HuggingFace). No custom training or preprocessing was performed.",
-            "✅ Precision": f"The highest similarity score is `{best[2]:.4f}` between **{best[0]}** and **{best[1]}**. Exact numeric scores are shown for all pairs.",
-            "✅ Relevance": "All three graphs directly support the similarity results: bar chart shows top pairs, heatmap shows all pair scores, and PCA shows spatial relationships.",
-            "✅ Logic": f"**{best[0]}** and **{best[1]}** have the highest score of `{best[2]:.4f}`, which logically makes sense as they likely share semantic meaning in the model's embedding space.",
-            "✅ Significance": f"The most significant result is the pair **{best[0]}** ↔ **{best[1]}** with score `{best[2]:.4f}`, which represents the strongest semantic connection in the input.",
-            "⚠️ Fairness (Limitation)": "The `all-MiniLM-L6-v2` model was trained primarily on English text. It may not accurately capture similarity for domain-specific jargon, non-English words, or very short single characters.",
-        }
-
-        for standard, explanation in standards.items():
-            st.markdown(f"**{standard}:** {explanation}")
+        # ── Top & Lowest Standard ──
+        top_std = max(standards_scores, key=standards_scores.get)
+        low_std = min(standards_scores, key=standards_scores.get)
+        st.success(f"✅ **Highest:** {top_std} — {standards_scores[top_std]:.1f}%")
+        st.error(f"⚠️ **Lowest:** {low_std} — {standards_scores[low_std]:.1f}%")
 
 st.markdown("---")
-st.caption("NLP Lab Quiz | Shifa Tameer-e-Millat University | Model: all-MiniLM-L6-v2 | Free & No Training")
+st.caption("NLP Lab Quiz | Shifa Tameer-e-Millat University | Google GoEmotions Model | Free & No Training")
